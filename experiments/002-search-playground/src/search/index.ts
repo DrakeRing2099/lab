@@ -3,7 +3,7 @@ import type { Song, SearchMethod } from "./types"
 import { containsMethod } from "./methods/contains";
 import { prefixMethod } from "./methods/prefix";
 import { fieldWeightedMethod } from "./methods/fieldWeighted";
-import { bm25LiteMethod } from "./methods/bm25Lite";
+import { bm25LiteMethod } from "./methods/bm25lite";
 import { fuzzySubsequenceMethod } from "./methods/fuzzySubsequence";
 import { levenshteinMethod } from "./methods/levenshtein";
 import { trigramMethod } from "./methods/trigram";
