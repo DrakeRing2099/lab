@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from .ingest import ingest
+from .query import query_lexical
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="coderag")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_ingest = sub.add_parser("ingest", help="Index a folder into SQLite")
+    p_ingest.add_argument("path", type=str, help="Path to repo/folder")
+    p_ingest.add_argument("--db", type=str, default="data/coderag.sqlite", help="SQLite db path")
+
+    p_ask = sub.add_parser("ask", help="Ask a question (lexical retrieval v1)")
+    p_ask.add_argument("path", type=str, help="Same path you ingested (repo root)")
+    p_ask.add_argument("question", type=str, help="Question to retrieve context for")
+    p_ask.add_argument("--db", type=str, default="data/coderag.sqlite", help="SQLite db path")
+    p_ask.add_argument("--k", type=int, default=6, help="Top K chunks")
+
+    args = parser.parse_args()
+
+    if args.cmd == "ingest":
+        repo = Path(args.path)
+        db = Path(args.db)
+        n_files, n_chunks = ingest(repo, db)
+        print(f"Indexed {n_files} files → {n_chunks} chunks into {db}")
+        return
+
+    if args.cmd == "ask":
+        repo = Path(args.path).resolve()
+        db = Path(args.db)
+        hits = query_lexical(db, repo_root=str(repo), question=args.question, k=args.k)
+
+        if not hits:
+            print("No hits.")
+            return
+
+        for i, h in enumerate(hits, start=1):
+            print("=" * 80)
+            print(f"[{i}] score={h.score:.2f}  chunk_id={h.chunk_id}")
+            print(f"    {h.path}:{h.start_line}-{h.end_line}")
+            print(f"    why: {h.why}")
+            print("-" * 80)
+            print(h.preview)
+        return
+
+if __name__ == "__main__":
+    main()

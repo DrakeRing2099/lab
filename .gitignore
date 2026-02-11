@@ -45,3 +45,6 @@ Thumbs.db
 # Local env files
 .env
 .env.*
+
+# Local databases
+*.sqlite
