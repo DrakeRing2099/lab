@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Set
 
 from .chunk import Chunk
 
@@ -69,3 +69,37 @@ def insert_chunks_with_embeddings(
         count += 1
     conn.commit()
     return count
+
+
+def list_indexed_paths(conn: sqlite3.Connection, repo_root: str) -> Set[str]:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT DISTINCT path FROM chunks WHERE repo_root = ?",
+        (repo_root,),
+    )
+    return {row[0] for row in cur.fetchall()}
+
+def get_hashes_for_path(conn: sqlite3.Connection, repo_root: str, path: str) -> Set[str]:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT content_hash FROM chunks WHERE repo_root = ? AND path = ?",
+        (repo_root, path),
+    )
+    return {row[0] for row in cur.fetchall()}
+
+def delete_path(conn: sqlite3.Connection, repo_root: str, path: str) -> None:
+    conn.execute(
+        "DELETE FROM chunks WHERE repo_root = ? AND path = ?",
+        (repo_root, path),
+    )
+
+def delete_paths(conn: sqlite3.Connection, repo_root: str, paths: Iterable[str]) -> int:
+    paths = list(paths)
+    if not paths:
+        return 0
+    cur = conn.cursor()
+    cur.executemany(
+        "DELETE FROM chunks WHERE repo_root = ? AND path = ?",
+        [(repo_root, p) for p in paths],
+    )
+    return cur.rowcount

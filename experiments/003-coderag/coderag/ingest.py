@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import pathspec
 
 from .chunk import Chunk, chunk_text
-from .store import connect, insert_chunks_with_embeddings
-from .util import is_probably_text_file
 from .embed import embed_texts, to_blob
+from .store import (
+    connect,
+    insert_chunks_with_embeddings,
+    list_indexed_paths,
+    get_hashes_for_path,
+    delete_paths,
+    delete_path,
+)
+from .util import is_probably_text_file
 
 DEFAULT_IGNORES = [
     ".git/",
@@ -49,26 +56,80 @@ def iter_files(root: Path) -> List[Path]:
 
     return files
 
-def ingest(repo_path: Path, db_path: Path) -> Tuple[int, int]:
+def ingest(repo_path: Path, db_path: Path) -> Tuple[int, int, int, int]:
+    """
+    Returns: (files_seen, paths_added_or_updated, paths_skipped, paths_deleted)
+    """
     repo_path = repo_path.resolve()
     repo_root = str(repo_path)
 
     files = iter_files(repo_path)
 
-    all_chunks: List[Chunk] = []
+    # group chunks by path (relative)
+    by_path: Dict[str, List[Chunk]] = {}
+
     for f in files:
         try:
             text = f.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        rel = f.relative_to(repo_path)  # store paths relative to repo root
-        all_chunks.extend(chunk_text(rel, text))
+
+        rel = f.relative_to(repo_path).as_posix()
+        chunks = chunk_text(Path(rel), text)  # Path for suffix/lang, but stored as posix in Chunk
+        by_path[rel] = chunks
 
     conn = connect(db_path)
-    
-    texts = [c.content for c in all_chunks]
-    embs = embed_texts(texts)
-    emb_blobs = [to_blob(embs[i]) for i in range(embs.shape[0])]
 
-    inserted = insert_chunks_with_embeddings(conn, repo_root=repo_root, chunks=all_chunks, embeddings=emb_blobs)
-    return len(files), inserted
+    # --- delete removed paths ---
+    indexed_paths = list_indexed_paths(conn, repo_root)
+    current_paths = set(by_path.keys())
+    removed = sorted(indexed_paths - current_paths)
+    if removed:
+        delete_paths(conn, repo_root, removed)
+
+    # --- decide which paths changed ---
+    changed_paths: List[str] = []
+    skipped = 0
+
+    for path, chunks in by_path.items():
+        new_hashes = {c.content_hash for c in chunks}
+        old_hashes = get_hashes_for_path(conn, repo_root, path)
+
+        # if not indexed before => changed
+        if not old_hashes:
+            changed_paths.append(path)
+            continue
+
+        # if chunk hashes identical => skip
+        if new_hashes == old_hashes:
+            skipped += 1
+            continue
+
+        changed_paths.append(path)
+
+    # --- apply updates: delete + insert for changed paths ---
+    inserted_chunks = 0
+
+    # batch embeddings for changed chunks only
+    changed_chunks: List[Chunk] = []
+    for p in changed_paths:
+        changed_chunks.extend(by_path[p])
+
+    if changed_chunks:
+        # delete old chunks for those paths
+        for p in changed_paths:
+            delete_path(conn, repo_root, p)
+
+        texts = [c.content for c in changed_chunks]
+        embs = embed_texts(texts)
+        emb_blobs = [to_blob(embs[i]) for i in range(embs.shape[0])]
+
+        inserted_chunks = insert_chunks_with_embeddings(
+            conn,
+            repo_root=repo_root,
+            chunks=changed_chunks,
+            embeddings=emb_blobs,
+        )
+
+    conn.commit()
+    return (len(files), len(changed_paths), skipped, len(removed))

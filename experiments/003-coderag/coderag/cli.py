@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .ingest import ingest
 from .query import query_lexical
+from .hybrid_query import query_hybrid
 
 from .vector_query import query_vector
 
@@ -30,14 +31,24 @@ def main() -> None:
     p_askv.add_argument("question", type=str)
     p_askv.add_argument("--db", type=str, default="data/coderag.sqlite")
     p_askv.add_argument("--k", type=int, default=6)
+    
+
+    p_askh = sub.add_parser("askh", help="Ask a question (hybrid: vector + lexical rerank)")
+    p_askh.add_argument("path", type=str)
+    p_askh.add_argument("question", type=str)
+    p_askh.add_argument("--db", type=str, default="data/coderag.sqlite")
+    p_askh.add_argument("--k", type=int, default=6)
+    p_askh.add_argument("--cand", type=int, default=30)
+
 
     args = parser.parse_args()
 
     if args.cmd == "ingest":
         repo = Path(args.path)
         db = Path(args.db)
-        n_files, n_chunks = ingest(repo, db)
-        print(f"Indexed {n_files} files → {n_chunks} chunks into {db}")
+        n_files, n_changed, n_skipped, n_removed = ingest(repo, db)
+        print(f"Seen {n_files} files | updated {n_changed} | skipped {n_skipped} | removed {n_removed} | db={db}")
+
         return
 
     if args.cmd == "ask":
@@ -74,6 +85,23 @@ def main() -> None:
             print("-" * 80)
             print(h.preview)
         return
+    
+    if args.cmd == "askh":
+        repo = Path(args.path).resolve()
+        db = Path(args.db)
+        hits = query_hybrid(db, repo_root=str(repo), question=args.question, k=args.k, cand=args.cand)
+        if not hits:
+            print("No hybrid hits.")
+            return
+        for i, h in enumerate(hits, start=1):
+            print("=" * 80)
+            print(f"[{i}] score={h.score:.3f}  cos={h.cos:.3f}  lex={h.lex:.1f}  chunk_id={h.chunk_id}")
+            print(f"    {h.path}:{h.start_line}-{h.end_line}")
+            print(f"    why: {h.why}")
+            print("-" * 80)
+            print(h.preview)
+        return
+
 
 
 if __name__ == "__main__":
