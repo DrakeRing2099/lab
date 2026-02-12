@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   language TEXT NOT NULL,
   content TEXT NOT NULL,
   content_hash TEXT NOT NULL,
+  embedding BLOB,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -31,6 +32,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     return conn
 
+# DEPRECIATED
 def upsert_chunks(conn: sqlite3.Connection, repo_root: str, chunks: Iterable[Chunk]) -> int:
     # v1 simple approach: delete then insert per file path group later.
     # For now: insert everything; we'll add incremental/cleanup in v1.5.
@@ -43,6 +45,26 @@ def upsert_chunks(conn: sqlite3.Connection, repo_root: str, chunks: Iterable[Chu
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (repo_root, c.path, c.start_line, c.end_line, c.language, c.content, c.content_hash),
+        )
+        count += 1
+    conn.commit()
+    return count
+
+def insert_chunks_with_embeddings(
+    conn: sqlite3.Connection,
+    repo_root: str,
+    chunks: list[Chunk],
+    embeddings: list[bytes],
+) -> int:
+    cur = conn.cursor()
+    count = 0
+    for c, emb in zip(chunks, embeddings):
+        cur.execute(
+            """
+            INSERT INTO chunks (repo_root, path, start_line, end_line, language, content, content_hash, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (repo_root, c.path, c.start_line, c.end_line, c.language, c.content, c.content_hash, emb),
         )
         count += 1
     conn.commit()

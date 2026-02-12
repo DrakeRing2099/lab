@@ -6,6 +6,9 @@ from pathlib import Path
 from .ingest import ingest
 from .query import query_lexical
 
+from .vector_query import query_vector
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="coderag")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -14,11 +17,19 @@ def main() -> None:
     p_ingest.add_argument("path", type=str, help="Path to repo/folder")
     p_ingest.add_argument("--db", type=str, default="data/coderag.sqlite", help="SQLite db path")
 
+    """
     p_ask = sub.add_parser("ask", help="Ask a question (lexical retrieval v1)")
     p_ask.add_argument("path", type=str, help="Same path you ingested (repo root)")
     p_ask.add_argument("question", type=str, help="Question to retrieve context for")
     p_ask.add_argument("--db", type=str, default="data/coderag.sqlite", help="SQLite db path")
     p_ask.add_argument("--k", type=int, default=6, help="Top K chunks")
+    """
+    
+    p_askv = sub.add_parser("askv", help="Ask a question (vector retrieval v2)")
+    p_askv.add_argument("path", type=str, help="Repo/folder root that was ingested")
+    p_askv.add_argument("question", type=str)
+    p_askv.add_argument("--db", type=str, default="data/coderag.sqlite")
+    p_askv.add_argument("--k", type=int, default=6)
 
     args = parser.parse_args()
 
@@ -30,6 +41,8 @@ def main() -> None:
         return
 
     if args.cmd == "ask":
+        print("This command has been depreciated. Use askv instead")
+        return 
         repo = Path(args.path).resolve()
         db = Path(args.db)
         hits = query_lexical(db, repo_root=str(repo), question=args.question, k=args.k)
@@ -46,6 +59,22 @@ def main() -> None:
             print("-" * 80)
             print(h.preview)
         return
+    
+    if args.cmd == "askv":
+        repo = Path(args.path).resolve()
+        db = Path(args.db)
+        hits = query_vector(db, repo_root=str(repo), question=args.question, k=args.k)
+        if not hits:
+            print("No vector hits (did you re-ingest after adding embeddings?)")
+            return
+        for i, h in enumerate(hits, start=1):
+            print("=" * 80)
+            print(f"[{i}] cos={h.score:.3f}  chunk_id={h.chunk_id}")
+            print(f"    {h.path}:{h.start_line}-{h.end_line}")
+            print("-" * 80)
+            print(h.preview)
+        return
+
 
 if __name__ == "__main__":
     main()

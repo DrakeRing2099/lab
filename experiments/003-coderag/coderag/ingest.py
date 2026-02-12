@@ -6,8 +6,9 @@ from typing import List, Tuple
 import pathspec
 
 from .chunk import Chunk, chunk_text
-from .store import connect, upsert_chunks
+from .store import connect, insert_chunks_with_embeddings
 from .util import is_probably_text_file
+from .embed import embed_texts, to_blob
 
 DEFAULT_IGNORES = [
     ".git/",
@@ -64,5 +65,10 @@ def ingest(repo_path: Path, db_path: Path) -> Tuple[int, int]:
         all_chunks.extend(chunk_text(rel, text))
 
     conn = connect(db_path)
-    inserted = upsert_chunks(conn, repo_root=repo_root, chunks=all_chunks)
+    
+    texts = [c.content for c in all_chunks]
+    embs = embed_texts(texts)
+    emb_blobs = [to_blob(embs[i]) for i in range(embs.shape[0])]
+
+    inserted = insert_chunks_with_embeddings(conn, repo_root=repo_root, chunks=all_chunks, embeddings=emb_blobs)
     return len(files), inserted
