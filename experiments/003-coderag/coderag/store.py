@@ -14,15 +14,32 @@ CREATE TABLE IF NOT EXISTS chunks (
   start_line INTEGER NOT NULL,
   end_line INTEGER NOT NULL,
   language TEXT NOT NULL,
+  symbol_kind TEXT,
+  symbol_name TEXT,
   content TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   embedding BLOB,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS symbols (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_root TEXT NOT NULL,
+  symbol_name TEXT NOT NULL,
+  symbol_kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  chunk_id INTEGER NOT NULL,
+  start_line INTEGER NOT NULL,
+  end_line INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_chunks_repo_path ON chunks(repo_root, path);
 CREATE INDEX IF NOT EXISTS idx_chunks_repo_hash ON chunks(repo_root, path, content_hash);
+
+CREATE INDEX IF NOT EXISTS idx_symbols_repo_name ON symbols(repo_root, symbol_name);
+CREATE INDEX IF NOT EXISTS idx_symbols_repo_kind ON symbols(repo_root, symbol_kind);
 """
+
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,11 +58,12 @@ def upsert_chunks(conn: sqlite3.Connection, repo_root: str, chunks: Iterable[Chu
     for c in chunks:
         cur.execute(
             """
-            INSERT INTO chunks (repo_root, path, start_line, end_line, language, content, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks (repo_root, path, start_line, end_line, language, symbol_kind, symbol_name, content, content_hash, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (repo_root, c.path, c.start_line, c.end_line, c.language, c.content, c.content_hash),
+            (repo_root, c.path, c.start_line, c.end_line, c.language, c.symbol_kind, c.symbol_name, c.content, c.content_hash, emb),
         )
+
         count += 1
     conn.commit()
     return count
@@ -61,10 +79,21 @@ def insert_chunks_with_embeddings(
     for c, emb in zip(chunks, embeddings):
         cur.execute(
             """
-            INSERT INTO chunks (repo_root, path, start_line, end_line, language, content, content_hash, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks (repo_root, path, start_line, end_line, language, symbol_kind, symbol_name, content, content_hash, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (repo_root, c.path, c.start_line, c.end_line, c.language, c.content, c.content_hash, emb),
+            (
+                repo_root,
+                c.path,
+                c.start_line,
+                c.end_line,
+                c.language,
+                c.symbol_kind,
+                c.symbol_name,
+                c.content,
+                c.content_hash,
+                emb,
+            ),
         )
         count += 1
     conn.commit()
@@ -102,4 +131,24 @@ def delete_paths(conn: sqlite3.Connection, repo_root: str, paths: Iterable[str])
         "DELETE FROM chunks WHERE repo_root = ? AND path = ?",
         [(repo_root, p) for p in paths],
     )
+    return cur.rowcount
+
+
+
+def rebuild_symbols(conn: sqlite3.Connection, repo_root: str) -> int:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM symbols WHERE repo_root = ?", (repo_root,))
+
+    cur.execute(
+        """
+        INSERT INTO symbols (repo_root, symbol_name, symbol_kind, path, chunk_id, start_line, end_line)
+        SELECT repo_root, symbol_name, symbol_kind, path, id, start_line, end_line
+        FROM chunks
+        WHERE repo_root = ?
+          AND symbol_name IS NOT NULL
+          AND symbol_kind IS NOT NULL
+        """,
+        (repo_root,),
+    )
+    conn.commit()
     return cur.rowcount

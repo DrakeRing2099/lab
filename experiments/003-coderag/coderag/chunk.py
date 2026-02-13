@@ -14,6 +14,9 @@ class Chunk:
     language: str
     content: str
     content_hash: str
+    symbol_kind: str | None = None
+    symbol_name: str | None = None
+
 
 def chunk_text(path: Path, text: str, max_lines: int = 120, overlap: int = 20) -> List[Chunk]:
     lines = text.splitlines()
@@ -58,3 +61,17 @@ def chunk_text(path: Path, text: str, max_lines: int = 120, overlap: int = 20) -
         start += step
 
     return chunks
+
+
+def chunk_file(path: Path, text: str, max_lines: int = 120, overlap: int = 20) -> list[Chunk]:
+    """
+    Prefer AST-based chunking for supported languages.
+    Fallback to the existing line-window chunk_text behavior.
+    """
+    # Local import to avoid circular dependency with ast_chunk. 
+    from .ast_chunk import chunk_code_by_ast
+
+    ast_chunks = chunk_code_by_ast(path, text)
+    if ast_chunks is not None:
+        return ast_chunks
+    return chunk_text(path, text, max_lines=max_lines, overlap=overlap)

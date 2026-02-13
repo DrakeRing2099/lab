@@ -14,7 +14,11 @@ from .store import (
     get_hashes_for_path,
     delete_paths,
     delete_path,
+    rebuild_symbols,
 )
+
+from .chunk import chunk_file
+
 from .util import is_probably_text_file
 
 DEFAULT_IGNORES = [
@@ -75,7 +79,7 @@ def ingest(repo_path: Path, db_path: Path) -> Tuple[int, int, int, int]:
             continue
 
         rel = f.relative_to(repo_path).as_posix()
-        chunks = chunk_text(Path(rel), text)  # Path for suffix/lang, but stored as posix in Chunk
+        chunks = chunk_file(Path(rel), text)  # Path for suffix/lang, but stored as posix in Chunk
         by_path[rel] = chunks
 
     conn = connect(db_path)
@@ -132,4 +136,5 @@ def ingest(repo_path: Path, db_path: Path) -> Tuple[int, int, int, int]:
         )
 
     conn.commit()
+    rebuild_symbols(conn, repo_root)
     return (len(files), len(changed_paths), skipped, len(removed))

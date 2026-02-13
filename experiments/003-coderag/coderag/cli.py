@@ -8,6 +8,7 @@ from .query import query_lexical
 from .hybrid_query import query_hybrid
 
 from .vector_query import query_vector
+from .symbols_query import find_definitions, find_references
 
 
 def main() -> None:
@@ -39,6 +40,17 @@ def main() -> None:
     p_askh.add_argument("--db", type=str, default="data/coderag.sqlite")
     p_askh.add_argument("--k", type=int, default=6)
     p_askh.add_argument("--cand", type=int, default=30)
+
+
+    p_def = sub.add_parser("def", help="Find symbol definitions")
+    p_def.add_argument("path", type=str)
+    p_def.add_argument("name", type=str)
+    p_def.add_argument("--db", type=str, default="data/coderag.sqlite")
+
+    p_refs = sub.add_parser("refs", help="Find symbol references")
+    p_refs.add_argument("path", type=str)
+    p_refs.add_argument("name", type=str)
+    p_refs.add_argument("--db", type=str, default="data/coderag.sqlite")
 
 
     args = parser.parse_args()
@@ -100,6 +112,29 @@ def main() -> None:
             print(f"    why: {h.why}")
             print("-" * 80)
             print(h.preview)
+        return
+
+
+    if args.cmd == "def":
+        repo = Path(args.path).resolve()
+        db = Path(args.db)
+        hits = find_definitions(db, str(repo), args.name)
+        if not hits:
+            print("No definitions found.")
+            return
+        for h in hits:
+            print(f"{h.symbol_kind} {h.symbol_name}  ->  {h.path}:{h.start_line}-{h.end_line}  (chunk_id={h.chunk_id})")
+        return
+
+    if args.cmd == "refs":
+        repo = Path(args.path).resolve()
+        db = Path(args.db)
+        refs = find_references(db, str(repo), args.name)
+        if not refs:
+            print("No references found.")
+            return
+        for path, line, snippet in refs:
+            print(f"{path}:{line}  {snippet}")
         return
 
 
