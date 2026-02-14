@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+import sqlite3
 from pathlib import Path
 
 from .ingest import ingest
@@ -9,6 +11,66 @@ from .hybrid_query import query_hybrid
 
 from .vector_query import query_vector
 from .symbols_query import find_definitions, find_references
+from .llm_gemini import generate_answer
+from .prompting import build_prompt, ContextChunk
+
+
+_chunk_ref_re = re.compile(r"\[chunk:(\d+)\]|\bchunk:(\d+)\b")
+
+
+def _extract_chunk_ids(text: str) -> list[int]:
+    seen: set[int] = set()
+    ids: list[int] = []
+    for match in _chunk_ref_re.finditer(text):
+        raw = match.group(1) or match.group(2)
+        if raw is None:
+            continue
+        chunk_id = int(raw)
+        if chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        ids.append(chunk_id)
+    return ids
+
+
+def _fetch_chunks(
+    db_path: Path, repo_root: str, chunk_ids: list[int]
+) -> dict[int, tuple[str, int, int, str]]:
+    if not chunk_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(chunk_ids))
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT id, path, start_line, end_line, content
+            FROM chunks
+            WHERE repo_root = ? AND id IN ({placeholders})
+            """,
+            (repo_root, *chunk_ids),
+        )
+        rows = cur.fetchall()
+        return {row[0]: (row[1], row[2], row[3], row[4]) for row in rows}
+    finally:
+        conn.close()
+
+
+def _build_contexts(
+    hits,
+    chunk_map: dict[int, tuple[str, int, int, str]],
+    max_chars_per_chunk: int,
+) -> list[ContextChunk]:
+    contexts: list[ContextChunk] = []
+    for h in hits:
+        row = chunk_map.get(h.chunk_id)
+        if row is None:
+            continue
+        path, start_line, end_line, content = row
+        if max_chars_per_chunk > 0:
+            content = content[:max_chars_per_chunk]
+        contexts.append((h.chunk_id, path, start_line, end_line, content))
+    return contexts
 
 
 def main() -> None:
@@ -40,6 +102,16 @@ def main() -> None:
     p_askh.add_argument("--db", type=str, default="data/coderag.sqlite")
     p_askh.add_argument("--k", type=int, default=6)
     p_askh.add_argument("--cand", type=int, default=30)
+
+
+    p_answer = sub.add_parser("answer", help="Answer a question (hybrid retrieval + Gemini)")
+    p_answer.add_argument("path", type=str, help="Repo/folder root that was ingested")
+    p_answer.add_argument("question", type=str)
+    p_answer.add_argument("--db", type=str, default="data/coderag.sqlite")
+    p_answer.add_argument("--k", type=int, default=6)
+    p_answer.add_argument("--cand", type=int, default=30)
+    p_answer.add_argument("--model", type=str, default="gemini-3-flash-preview")
+    p_answer.add_argument("--max_chars_per_chunk", type=int, default=2000)
 
 
     p_def = sub.add_parser("def", help="Find symbol definitions")
@@ -112,6 +184,38 @@ def main() -> None:
             print(f"    why: {h.why}")
             print("-" * 80)
             print(h.preview)
+        return
+
+
+    if args.cmd == "answer":
+        repo = Path(args.path).resolve()
+        db = Path(args.db)
+        hits = query_hybrid(db, repo_root=str(repo), question=args.question, k=args.k, cand=args.cand)
+        if not hits:
+            print("No hybrid hits.")
+            return
+        chunk_ids = [h.chunk_id for h in hits]
+        chunk_map = _fetch_chunks(db, repo_root=str(repo), chunk_ids=chunk_ids)
+        contexts = _build_contexts(hits, chunk_map, args.max_chars_per_chunk)
+        if not contexts:
+            print("No chunk content found for hits.")
+            return
+        prompt = build_prompt(args.question, contexts)
+        response_text = generate_answer(prompt, model=args.model, temperature=0.1)
+        print(response_text)
+
+        used_ids = _extract_chunk_ids(response_text)
+        print("\nCitations (resolved):")
+        if not used_ids:
+            print("- (none)")
+            return
+        for chunk_id in used_ids:
+            row = chunk_map.get(chunk_id)
+            if row is None:
+                print(f"- chunk:{chunk_id} (missing metadata)")
+                continue
+            path, start_line, end_line, _content = row
+            print(f"- chunk:{chunk_id} {path}:{start_line}-{end_line}")
         return
 
 
