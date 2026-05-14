@@ -1,0 +1,4 @@
+faster-whisper
+soundfile
+numpy
+jiwer
