@@ -183,8 +183,29 @@ async def get_crossable_orders(
         if order:
             crossable.append(order)
 
-    # Sort by timestamp — earlier arrival = higher priority (time priority)
-    crossable.sort(key=lambda o: o.timestamp)
+    # Self-trade prevention (STP) — standard on every real exchange.
+    # If the resting order belongs to the same trader as the incoming
+    # order, skip it. Without this, a market maker's new quotes cross
+    # against its own stale resting quotes, producing phantom trades
+    # with buyer == seller. No real P&L changes hands; it just
+    # pollutes the tape and inflates volume statistics.
+    crossable = [o for o in crossable if o.trader_id != incoming.trader_id]
+
+    # Preserve price-time priority: best price first, then earliest arrival.
+    if incoming.side == Side.BID:
+        crossable.sort(
+            key=lambda o: (
+                o.price if o.price is not None else float("inf"),
+                o.timestamp,
+            )
+        )
+    else:
+        crossable.sort(
+            key=lambda o: (
+                -(o.price if o.price is not None else float("-inf")),
+                o.timestamp,
+            )
+        )
     return crossable
 
 
@@ -228,11 +249,12 @@ async def match_order(
             bid_order, ask_order = resting, incoming
 
         trade = Trade.create(bid_order, ask_order, fill_qty)
+        trade.price = resting.price  # trades clear at the resting/maker price
         trades.append(trade)
 
         remaining_qty -= fill_qty
 
-        if fill_qty >= resting.qty:
+        if fill_qty >= resting.qty - 1e-9:
             # Resting order fully consumed — remove from book
             await remove_from_book(r, resting.order_id, resting.side.value)
         else:
