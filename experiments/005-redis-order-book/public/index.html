@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redis Order Book</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border-bottom: 1px solid #222;
+      background: #111;
+    }
+    header h1 { font-size: 14px; font-weight: normal; color: #888; letter-spacing: 2px; text-transform: uppercase; }
+    #status { font-size: 11px; }
+    #status.connected    { color: #4caf50; }
+    #status.disconnected { color: #f44336; }
+    #status.connecting   { color: #ff9800; }
+
+    /* ── Stats bar ── */
+    #stats {
+      display: flex;
+      gap: 30px;
+      padding: 8px 20px;
+      background: #111;
+      border-bottom: 1px solid #222;
+      font-size: 12px;
+      color: #555;
+    }
+    #stats span { display: flex; gap: 6px; }
+    #stats .label { color: #444; }
+    #stats .val   { color: #aaa; font-weight: bold; }
+    #mid-val   { color: #ffd700; }
+    #bid-val   { color: #4caf50; }
+    #ask-val   { color: #f44336; }
+    #spread-val{ color: #888; }
+
+    /* ── Main layout ── */
+    main {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Order book panel ── */
+    #book-panel {
+      border-right: 1px solid #222;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-title {
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #444;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #1a1a1a;
+    }
+
+    #book {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* asks go top half, bids go bottom half */
+    #asks-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end; /* push asks down toward mid */
+      overflow: hidden;
+    }
+    #bids-container {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .book-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 60px;
+      padding: 2px 12px;
+      line-height: 1.6;
+      align-items: center;
+      transition: background 0.1s;
+    }
+    .book-row:hover { background: #1a1a1a; }
+
+    .book-row .price  { font-weight: bold; text-align: right; }
+    .book-row .id     { color: #333; font-size: 11px; padding-left: 8px; }
+    .book-row .side   { text-align: center; font-size: 10px; letter-spacing: 1px; }
+
+    .ask .price { color: #f44336; }
+    .ask .side  { color: #5c1f1f; }
+    .bid .price { color: #4caf50; }
+    .bid .side  { color: #1a3d1f; }
+
+    /* mid price row */
+    #mid-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 60px;
+      padding: 6px 12px;
+      background: #1a1800;
+      border-top: 1px solid #2a2200;
+      border-bottom: 1px solid #2a2200;
+    }
+    #mid-row .price { color: #ffd700; font-weight: bold; text-align: right; }
+    #mid-row .label { color: #554d00; font-size: 11px; padding-left: 8px; }
+
+    /* ── Trade tape panel ── */
+    #tape-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #tape-header {
+      display: grid;
+      grid-template-columns: 80px 60px 1fr 1fr 80px;
+      padding: 8px 12px;
+      font-size: 10px;
+      color: #333;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      border-bottom: 1px solid #1a1a1a;
+    }
+
+    #tape {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .tape-row {
+      display: grid;
+      grid-template-columns: 80px 60px 1fr 1fr 80px;
+      padding: 3px 12px;
+      border-bottom: 1px solid #111;
+      animation: fadeIn 0.3s ease;
+      line-height: 1.7;
+    }
+    .tape-row:hover { background: #1a1a1a; }
+
+    @keyframes fadeIn {
+      from { background: #1a1500; }
+      to   { background: transparent; }
+    }
+
+    .tape-row .t-price  { color: #00bcd4; font-weight: bold; }
+    .tape-row .t-qty    { color: #888; }
+    .tape-row .t-buyer  { color: #4caf50; }
+    .tape-row .t-seller { color: #f44336; }
+    .tape-row .t-time   { color: #333; text-align: right; font-size: 11px; }
+
+    /* ── Scrollbars ── */
+    ::-webkit-scrollbar       { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0d0d0d; }
+    ::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+
+    /* ── Empty states ── */
+    .empty { color: #333; padding: 20px 12px; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Redis Order Book</h1>
+  <div id="status" class="connecting">⬤ connecting...</div>
+</header>
+
+<div id="stats">
+  <span><span class="label">mid</span>  <span class="val" id="mid-val">—</span></span>
+  <span><span class="label">bid</span>  <span class="val" id="bid-val">—</span></span>
+  <span><span class="label">ask</span>  <span class="val" id="ask-val">—</span></span>
+  <span><span class="label">spread</span><span class="val" id="spread-val">—</span></span>
+  <span><span class="label">trades</span><span class="val" id="trade-count">0</span></span>
+</div>
+
+<main>
+
+  <!-- Order book -->
+  <div id="book-panel">
+    <div class="panel-title">order book</div>
+    <div id="book">
+      <div id="asks-container"></div>
+      <div id="mid-row">
+        <span class="price" id="mid-price-display">—</span>
+        <span class="label">mid</span>
+      </div>
+      <div id="bids-container"></div>
+    </div>
+  </div>
+
+  <!-- Trade tape -->
+  <div id="tape-panel">
+    <div class="panel-title">trade tape</div>
+    <div id="tape-header">
+      <span>price</span>
+      <span>qty</span>
+      <span>buyer</span>
+      <span>seller</span>
+      <span style="text-align:right">time</span>
+    </div>
+    <div id="tape">
+      <div class="empty">waiting for trades...</div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  /**
+   * BROWSER WEBSOCKET API
+   * ──────────────────────
+   * The WebSocket API is built into every modern browser — no imports.
+   * new WebSocket(url) initiates the connection + handshake.
+   *
+   * Four event handlers:
+   *   ws.onopen    — connection established
+   *   ws.onmessage — server sent us a message (e.data is the string)
+   *   ws.onclose   — connection closed (we reconnect)
+   *   ws.onerror   — connection error
+   *
+   * ws.send(string) — send a message to the server (we don't use
+   * this here — we're read-only — but it's how you'd send orders
+   * if this were an actual trading interface).
+   */
+
+  const statusEl     = document.getElementById("status");
+  const midEl        = document.getElementById("mid-val");
+  const bidEl        = document.getElementById("bid-val");
+  const askEl        = document.getElementById("ask-val");
+  const spreadEl     = document.getElementById("spread-val");
+  const tradeCountEl = document.getElementById("trade-count");
+  const midPriceEl   = document.getElementById("mid-price-display");
+  const asksContainer= document.getElementById("asks-container");
+  const bidsContainer= document.getElementById("bids-container");
+  const tapeEl       = document.getElementById("tape");
+
+  let tradeCount = 0;
+  let ws;
+
+  // ── WebSocket connection + auto-reconnect ──────────────────────
+  //
+  // We wrap connect() in a function so we can call it again on close.
+  // Reconnection with exponential backoff is production-standard —
+  // servers restart, network blips, etc.
+  function connect() {
+    const url = `ws://${location.host}`;
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      statusEl.textContent = "⬤ connected";
+      statusEl.className   = "connected";
+      console.log("[ws] Connected to", url);
+    };
+
+    ws.onclose = () => {
+      statusEl.textContent = "⬤ disconnected — reconnecting...";
+      statusEl.className   = "disconnected";
+      console.log("[ws] Disconnected, retrying in 2s");
+      setTimeout(connect, 2000);
+    };
+
+    ws.onerror = (err) => {
+      console.error("[ws] Error:", err);
+    };
+
+    // ── Message handler ──────────────────────────────────────────
+    //
+    // All messages are JSON. We switch on type:
+    //   "book"  → re-render the order book ladder
+    //   "trade" → prepend a row to the trade tape
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+
+      if (msg.type === "book") {
+        renderBook(msg);
+      } else if (msg.type === "trade") {
+        renderTrade(msg);
+      }
+    };
+  }
+
+  // ── Render order book ──────────────────────────────────────────
+  //
+  // Rebuilds the entire bid/ask DOM on every book message.
+  // Simple and always consistent — no diff/patch needed at this scale.
+  //
+  // Asks: reversed so the lowest ask sits closest to mid.
+  // Bids: highest first, already in order from ZREVRANGE.
+  function renderBook(msg) {
+    const { bids, asks, mid } = msg;
+
+    // Stats bar
+    const bestBid = bids.length ? bids[0].price   : null;
+    const bestAsk = asks.length ? asks[0].price    : null;
+    const spread  = bestBid && bestAsk ? bestAsk - bestBid : null;
+
+    midEl.textContent    = mid     ? mid.toFixed(4)          : "—";
+    bidEl.textContent    = bestBid ? bestBid.toFixed(2)       : "—";
+    askEl.textContent    = bestAsk ? bestAsk.toFixed(2)       : "—";
+    spreadEl.textContent = spread  ? spread.toFixed(4)        : "—";
+    midPriceEl.textContent = mid   ? mid.toFixed(4)           : "—";
+
+    // Asks — rendered in reverse (lowest ask closest to mid)
+    asksContainer.innerHTML = [...asks].reverse().map(({ orderId, price }) => `
+      <div class="book-row ask">
+        <span class="price">${price.toFixed(2)}</span>
+        <span class="id">${orderId.slice(0, 8)}</span>
+        <span class="side">ASK</span>
+      </div>
+    `).join("");
+
+    // Bids
+    bidsContainer.innerHTML = bids.map(({ orderId, price }) => `
+      <div class="book-row bid">
+        <span class="price">${price.toFixed(2)}</span>
+        <span class="id">${orderId.slice(0, 8)}</span>
+        <span class="side">BID</span>
+      </div>
+    `).join("");
+  }
+
+  // ── Render trade ───────────────────────────────────────────────
+  //
+  // Prepends a new row to the tape.
+  // Caps at 100 rows — remove oldest when over the limit.
+  // The CSS fadeIn animation highlights new rows visually.
+  const MAX_TAPE_ROWS = 100;
+
+  function renderTrade(trade) {
+    tradeCount++;
+    tradeCountEl.textContent = tradeCount;
+
+    // Remove empty state on first trade
+    const empty = tapeEl.querySelector(".empty");
+    if (empty) empty.remove();
+
+    const time = new Date(trade.timestamp * 1000).toLocaleTimeString();
+
+    const row = document.createElement("div");
+    row.className = "tape-row";
+    row.innerHTML = `
+      <span class="t-price">${trade.price.toFixed(2)}</span>
+      <span class="t-qty">${trade.qty.toFixed(1)}</span>
+      <span class="t-buyer">${trade.buyer}</span>
+      <span class="t-seller">${trade.seller}</span>
+      <span class="t-time">${time}</span>
+    `;
+
+    // Prepend so newest is at top
+    tapeEl.insertBefore(row, tapeEl.firstChild);
+
+    // Trim old rows
+    while (tapeEl.children.length > MAX_TAPE_ROWS) {
+      tapeEl.removeChild(tapeEl.lastChild);
+    }
+  }
+
+  // ── Start ──────────────────────────────────────────────────────
+  connect();
+</script>
+</body>
+</html> 

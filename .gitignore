@@ -17,10 +17,37 @@ build/
 dist/
 *.whl
 
+# Node / JavaScript
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+.yarn/
+!.yarn/releases/
+!.yarn/plugins/
+!.yarn/sdks/
+!.yarn/versions/
+
+# Frontend build / framework output
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+vite.config.ts.timestamp-*
+vite.config.js.timestamp-*
+out/
+storybook-static/
+
 # Test / lint caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.eslintcache
+.stylelintcache
+coverage/
 .coverage
 coverage.xml
 htmlcov/
