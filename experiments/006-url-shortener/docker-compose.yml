@@ -1,0 +1,12 @@
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
+    ports:
+      - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    #
+    # -sharedDb   : all clients share the same database file
+    #               (without this, each AWS region gets its own db)
+    # -inMemory   : store everything in RAM, no disk writes
+    #               remove this flag if you want data to survive restarts
