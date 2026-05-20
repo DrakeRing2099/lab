@@ -20,7 +20,7 @@ sys.path.insert(0, ".")
 
 from src.config import get_table
 from src.db import (
-    create_table, put_url, put_user, get_url,
+    create_table, delete_table_if_exists, put_url, put_user, get_url,
     get_urls_for_user, record_click, get_click_history,
     get_user,
 )
@@ -43,6 +43,7 @@ def main():
 
     # ── 1. Create table ──────────────────────────────────────────
     separator("Creating table")
+    delete_table_if_exists()
     create_table()
 
     # ── 2. Create a user ─────────────────────────────────────────

@@ -26,7 +26,7 @@ from datetime import date
 from decimal import Decimal
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 
 from src.config import (
     PREFIX_URL, PREFIX_USER, SK_CLICK, SK_META,
@@ -52,22 +52,7 @@ def create_table() -> None:
     else. You do NOT declare original_url, click_count, etc. here.
     That's different from SQL where you define every column upfront.
 
-    BILLING MODE
-    ─────────────
-    PAY_PER_REQUEST (on-demand) vs PROVISIONED.
-    Provisioned: you specify read/write capacity units upfront,
-                 pay for them whether you use them or not.
-    On-demand:   you pay per request, DynamoDB scales automatically.
-    For learning and low traffic: on-demand. Always.
-
-    GSI PROJECTION
-    ───────────────
-    INCLUDE means "copy these specific attributes into the GSI."
-    We include original_url so the user dashboard can show the
-    URL without fetching each item individually.
-    ALL would copy every attribute — more storage, higher write cost.
-    KEYS_ONLY would only copy PK, SK, and GSI keys — cheapest,
-    but then you'd need a second GetItem per URL for the dashboard.
+ 
     """
     dynamodb = boto3.resource(
         "dynamodb",
@@ -127,6 +112,17 @@ def create_table() -> None:
 
 
 # ── URL operations ────────────────────────────────────────────────
+
+def delete_table_if_exists() -> None:
+    """Delete the local smoke-test table if it already exists."""
+    table = get_table()
+    try:
+        table.delete()
+        table.wait_until_not_exists()
+        print(f"[db] Table '{TABLE_NAME}' deleted")
+    except table.meta.client.exceptions.ResourceNotFoundException:
+        pass
+
 
 def put_url(url: URL) -> None:
     """
@@ -204,6 +200,7 @@ def get_urls_for_user(user_id: str) -> list[URL]:
     response = table.query(
         IndexName=USER_INDEX,
         KeyConditionExpression=Key("user_id").eq(user_id),
+        FilterExpression=Attr("SK").eq(SK_META),
         ScanIndexForward=False,   # newest first
     )
     return [URL.from_item(item) for item in response.get("Items", [])]
